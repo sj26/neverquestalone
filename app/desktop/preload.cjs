@@ -14,6 +14,7 @@ const PREFIX = 'nqa:';
 const CALLS = [
   'status', 'dismissNotice', 'providers', 'appInfo', 'notices', 'appState', 'setAppState', 'setLoginItem',
   'stageKey', 'dropStagedKey', 'testKey', 'deleteKey', 'connectCustom', 'choose',
+  'connectChatGPT', 'cancelChatGPT', 'signOutChatGPT',
   'caps', 'setCaps', 'privacy', 'setPrivacy',
   'usage', 'connections', 'lastRequest',
   'memory', 'forgetMemory', 'transcripts', 'setRetention', 'regenerateSafetyId',

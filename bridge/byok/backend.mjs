@@ -547,12 +547,14 @@ export function createLocalBackend(handlers = {}, opts = {}) {
   let prov = null;
   function current() {
     if (prov) return prov;
-    const manifest = manifestFor(settings.provider, manifests, settings.custom);
+    const subscription = settings.provider === 'openai' && settings.auth === 'oauth';
+    const manifest = subscription ? opts.chatgpt?.manifest() : manifestFor(settings.provider, manifests, settings.custom);
     if (!manifest) throw new Error(`unknown provider ${String(settings.provider).slice(0, 32)}`);
     const model = settings.model ?? manifest.models?.default ?? null;
     const listed = manifest.models?.list?.find(e => e.id === model);
     const provider = createProvider(manifest, {
       getKey: async (id) => {
+        if (subscription) return { key: await opts.chatgpt.accessToken(), kind: 'oauth' };
         if (!keystore) return null;
         const key = await keystore.get(id);
         return key && settings.auth === 'oauth' ? { key, kind: 'oauth' } : key;
@@ -775,6 +777,11 @@ export function createLocalBackend(handlers = {}, opts = {}) {
     let p;
     try { p = current(); } catch { keyState = 'missing'; keyReason = 'unknown provider'; return; }
     if (p.local) { keyState = 'ok'; return; }
+    if (p.manifest.subscription) {
+      keyState = opts.chatgpt?.view().connected ? (keyState === 'expired' ? 'expired' : 'ok') : 'expired';
+      keyReason = null;
+      return;
+    }
     // Other (custom) runs with or without a key: the service it names decides (a 401 is auth_invalid).
     if (p.manifest.auth?.optional === true) { if (keyState === 'missing') { keyState = 'ok'; keyReason = null; } return; }
     if (!keystore) { keyState = 'missing'; keyReason = 'no key store'; return; }
@@ -800,7 +807,10 @@ export function createLocalBackend(handlers = {}, opts = {}) {
       case 'auth_invalid': keyState = 'invalid'; break;
       case 'oauth_expired': keyState = 'expired'; break;
       case 'no_key': keyState = 'missing'; keyReason = err.code === 'keystore_error' ? 'key store unreadable' : 'no key'; break;
-      case 'rate_limited': slowedUntil = clock() + (Number.isFinite(err.retryAfterMs) ? err.retryAfterMs : 60000); slowedBy = { kind: err.kind }; break;
+      case 'rate_limited':
+        if (current().manifest.subscription && err.code === 'subscription_sharing_usage_limit_exceeded') paused = true;
+        else { slowedUntil = clock() + (Number.isFinite(err.retryAfterMs) ? err.retryAfterMs : 60000); slowedBy = { kind: err.kind }; }
+        break;
       case 'rate_limited_daily':
         slowedUntil = Number.isFinite(err.resetAt) ? err.resetAt : clock() + 3600000;
         slowedBy = { kind: err.kind };
@@ -1223,6 +1233,9 @@ export function createLocalBackend(handlers = {}, opts = {}) {
           return finishFailed(t, err, { model: modelLabel(p.manifest, p.model), fallbackModel: modelLabel(p.manifest, sw.to) });
         }
       }
+      // A plan limit is not a transient API rate limit. Pause until the player resumes; the
+      // code alone says neither which allowance was reached nor when it will reset.
+      if (p.manifest.subscription && err.code === 'subscription_sharing_usage_limit_exceeded') return finishFailed(t, err);
       const plan = retryPlan(err, attempt, { maxRetries: MAX_RETRIES, random });
       if (!plan.retry) return finishFailed(t, err);
       noteTrouble(err);
@@ -1658,7 +1671,11 @@ export function createLocalBackend(handlers = {}, opts = {}) {
     diagnostics,
     /** Look at the key store again (after a key was set, replaced or deleted); keyChanged clears a rejected key. */
     async refresh({ keyChanged = false } = {}) {
-      if (keyChanged) { keyState = 'ok'; keyReason = null; }
+      if (keyChanged) {
+        keyState = 'ok'; keyReason = null;
+        // A newly connected account can have a different catalog even with the same model picked.
+        if (settings.provider === 'openai' && settings.auth === 'oauth') prov = null;
+      }
       await checkKey();
       syncState();
       if (keyChanged) providerChanged({ keyChanged: true });
@@ -1717,7 +1734,11 @@ export function createLocalBackend(handlers = {}, opts = {}) {
       return { ...settings };
     },
     /** Pause or resume (the app's switch): unsent turns wait in the core's outbox, queued ones here (BR-03). */
-    pause(onOff = true) { paused = !!onOff; syncState(); wakeHeld(); return st.state; },
+    pause(onOff = true) {
+      paused = !!onOff;
+      if (!paused && lastError?.code === 'subscription_sharing_usage_limit_exceeded') lastError = null;
+      syncState(); wakeHeld(); return st.state;
+    },
     /**
      * The core's typed guard paused sending (true) or the player pressed Resume sending (false): queued
      * turns wait meanwhile, as they do while paused (code health BR-03). Returns whether it holds.

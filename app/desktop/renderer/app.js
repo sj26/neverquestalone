@@ -575,7 +575,7 @@
   }
   /** The AIs with a row of their own (Claude, ChatGPT, Grok, Gemini), in the data file's order; hidden ones left out. */
   function cardAis() {
-    return (S.providers || []).filter(function (p) { return p && !p.hidden && p.auth === 'key' && p.display && p.display.card; })
+    return (S.providers || []).filter(function (p) { return p && !p.hidden && (p.auth === 'key' || p.auth === 'oauth') && p.display && p.display.card; })
       .sort(function (a, b) { return (a.display.order || 0) - (b.display.order || 0); });
   }
   function otherShown() { var p = providerById('custom'); return !!p && !p.hidden; }
@@ -1037,7 +1037,9 @@
         break;
       case 'key_invalid':
       case 'signed_out':
-        c = card2('bad', line('homeCard.keyInvalid'), [replace, isCustom(pid) ? null : function () { return btn(T('common.openKeysBtn', v), openLink(pid + '.keys'), 'btn btn-quiet', { fk: 'open-keys', after: 'out' }); }]);
+        c = prov && prov.auth === 'oauth'
+          ? { tone: 'warn', head: T('chatgpt.signInAgain'), acts: [function () { return chatgptButton(function () { reconnectChatGPT(); }); }] }
+          : card2('bad', line('homeCard.keyInvalid'), [replace, isCustom(pid) ? null : function () { return btn(T('common.openKeysBtn', v), openLink(pid + '.keys'), 'btn btn-quiet', { fk: 'open-keys', after: 'out' }); }]);
         break;
       case 'out_of_credit':
         // The fix first (CL-words-22): a banner shows only its first button.
@@ -1105,9 +1107,15 @@
         // Chats that can't be saved (code health BR-11): the bridge's words (status-view.mjs savingLines). The
         // fix is the player's, outside the app, and the app writes them again by itself: no button.
         if (p.view.saving) c = { tone: 'bad', head: F.clean(p.view.saving.headline, 120), sub: F.clean(p.view.saving.detail, 240), acts: [] };
-        else if (u.needs === 'near_cap' && prov && prov.auth !== 'local' && Number(u.capMicros) > 0) {
+        else if (u.needs === 'near_cap' && prov && prov.auth !== 'local' && prov.auth !== 'oauth' && Number(u.capMicros) > 0) {
           c = { tone: 'warn', head: T('homeCard.nearCap.headline'), sub: T('homeCard.nearCap.detail', { name: companion(), limit: F.usdMicros(u.capMicros) }), acts: [function () { return btn(T('homeCard.cap.raiseLimitBtn'), openLimit, 'btn btn-quiet', { fk: 'raise-limit' }); }], say: T('homeCard.nearCap.liveLine') };
         }
+    }
+    if (prov && prov.auth === 'oauth' && p.lastError && p.lastError.code === 'subscription_sharing_usage_limit_exceeded') {
+      c = { tone: 'warn', head: T('chatgpt.usage_limit'), acts: [
+        function () { return small(T('chatgpt.usageBtn'), openLink('openai.usage'), { fk: 'chatgpt-usage' }); },
+        function () { return small(T('home.resumeBtn'), function () { B.setPaused({ paused: false }).then(refreshStatus).then(function () { rerender(); }); }, { fk: 'resume' }); },
+      ] };
     }
     if (!c) return null;
     c.key = key;
@@ -1616,6 +1624,7 @@
     var got = res && (res.provider || (res.error === 'hidden_provider' ? null : res.guess));
     var moved = false;
     if (got && providerById(got) && !isCustom(got) && where !== 'page' && st.pick !== got) { st.pick = got; st.provider = got; moved = true; }
+    if (got === 'openai') st.apiKey = true;
     if (res && res.stageId && res.held) st.stage = { stageId: res.stageId, provider: res.provider };
     else if (res && !res.held) st.stage = null;
     if (where === 'ai' && moved) saveSetup();
@@ -1768,6 +1777,7 @@
     if (!where || S.sheet) return;
     var st = KS(where);
     if (st.pick === 'custom') return;
+    if (st.pick === 'openai' && !st.apiKey) return;
     var t = e.target;
     if (t && t.tagName && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
     e.preventDefault();
@@ -1857,7 +1867,9 @@
           if (id === 'custom') chipNode = customOf() && cur && cur.id === 'custom' && aiReady() ? chip(T('ai.connectedChip'), 'ok') : null;
           else if (ok) chipNode = null; // the tick and the result line say it (APP-D-29)
           else if (!(st.slot && st.pick === id) && k.saved) chipNode = rejectedKey(k) ? chip(T('ai.keyRejectedChip'), 'bad') : k.state === 'no_credit' ? chip(T('ai.noCreditChip'), 'warn') : chip(T('ai.keySavedChip'), 'ok');
-          var cost = costOf(id);
+          if (id === 'openai' && !st.apiKey && p.chatgpt && p.chatgpt.connected) chipNode = chip(T('ai.connectedChip'), 'ok');
+          var apiDay = id === 'openai' && st.apiKey && p.apiModels ? dayOf(p.apiModels[0]) : null;
+          var cost = id === 'openai' && !st.apiKey ? T('chatgpt.plan') : apiDay ? T('ai.dayCostLine', { dayCost: apiDay.text }) : costOf(id);
           return h('button', { type: 'button', class: 'choice' + (checked ? ' is-checked' : ''), 'data-fk': 'card-' + id, id: 'choice-' + id },
             h('span', { class: 'choice-name' }, h('span', { class: 'choice-names' }, h('span', { class: 'choice-title', text: id === 'custom' ? F.clean(disp('custom').card || 'Other', 24) : aiName(id) })), chipNode),
             h('span', { class: 'choice-cost', 'data-count': cost && cost !== T('ai.otherCostLine') ? 'data' : null }, keepWhole(cost)),
@@ -1885,6 +1897,7 @@
    */
   function aiActions(st, where) {
     var pid = st.pick;
+    if (pid === 'openai' && !st.apiKey) return chatgptActions(st, where);
     var p = providerById(pid) || {};
     var v = namesOf(pid);
     var k = p.key || {};
@@ -1937,11 +1950,74 @@
     // Your AI's Switch: a key saved for an AI that isn't in use can go too (the one in use has its Key row's).
     var cur = P().provider;
     var drop = where === 'pick' && !r && !busyPaste && k.saved && !isCustom(pid) && !(cur && cur.id === pid) ? deleteKeyBtn(pid, 'btn btn-quiet btn-danger') : null;
-    return h('div', { class: 'actions', 'data-key': 'actions' }, main, quietNode, ghostNode, drop);
+    return h('div', { class: 'actions', 'data-key': 'actions' }, main, quietNode, ghostNode, drop,
+      pid === 'openai' ? btn(T('chatgpt.planBtn'), function () { st.apiKey = false; st.slot = null; rerender(); }, 'btn-link', { fk: 'chatgpt-plan' }) : null);
+  }
+  function chatgptButton(fn) {
+    var b = btn(T('chatgpt.connectBtn'), fn, 'btn btn-primary chatgpt-signin', { fk: 'chatgpt-connect' });
+    b.insertBefore(h('span', { class: 'chatgpt-logo', 'aria-hidden': 'true' }), b.firstChild);
+    return b;
+  }
+  function chatgptSheet() {
+    return { title: T('chatgpt.plan'), sections: [
+      { label: T('chatgpt.usageLabel'), body: [T('chatgpt.usingPlan'), sheetLinkRow(T('chatgpt.usageBtn'), openLink('openai.usage'), 'chatgpt-usage')] },
+      { label: T('details.leavesLabel'), body: [sheetCard(whereRows('openai'))] },
+    ] };
+  }
+  function reconnectChatGPT(options) {
+    openChange();
+    var st = KS('pick');
+    st.pick = 'openai'; st.apiKey = false; st.oauthAccount = options && options.newAccount ? 'new' : null;
+    startChatGPT(st, 'pick', options);
+  }
+  function startChatGPT(st, where, options) {
+    if (st.busy) return;
+    st.busy = 'oauth'; st.oauthResult = null; st.slot = null;
+    rerender();
+    B.connectChatGPT(options || (st.oauthAccount === 'new' ? { newAccount: true } : st.oauthAccount ? { account: st.oauthAccount } : {})).then(function (r) {
+      st.busy = null; st.oauthResult = r || { ok: false, error: 'failed' };
+      return ensureProviders().then(refreshStatus);
+    }, function () { st.busy = null; st.oauthResult = { ok: false, error: 'failed' }; }).then(function () { rerender(); });
+  }
+  function chatgptActions(st, where) {
+    if (st.busy === 'oauth') return h('div', { class: 'actions', 'data-key': 'actions' },
+      busyNow(primary(T('chatgpt.waitingBtn'), null, { fk: 'chatgpt-wait' })),
+      btn(T('chatgpt.cancelBtn'), function () { B.cancelChatGPT(); }, 'btn-link', { fk: 'chatgpt-cancel' }));
+    var result = st.oauthResult;
+    var p = providerById('openai') || {};
+    var accounts = p.chatgpt && p.chatgpt.accounts || [];
+    var selected = st.oauthAccount || (p.chatgpt && p.chatgpt.account && p.chatgpt.account.id) || (accounts.length ? accounts[accounts.length - 1].id : 'new');
+    var cur = P().provider;
+    var connected = p.auth === 'oauth' && p.chatgpt && p.chatgpt.connected && p.chatgpt.account.id === selected
+      && !(cur && cur.id === 'openai' && cur.keyState === 'expired');
+    var picker = accounts.length && !(result && result.ok) ? h('select', { class: 'input', 'aria-label': T('chatgpt.accountLabel'), 'data-fk': 'chatgpt-account', onChange: function (e) { st.oauthAccount = e.target.value; rerender(); } },
+      accounts.map(function (a) { return h('option', { value: a.id, selected: a.id === selected, text: F.clean(a.label, 100) }); }),
+      h('option', { value: 'new', selected: selected === 'new', text: T('chatgpt.addAccount') })) : null;
+    return h('div', { class: 'actions', 'data-key': 'actions' },
+      picker,
+      result && result.ok ? primary(T('chatgpt.gotItBtn'), function () { afterConnect(where); }, { fk: 'chatgpt-done' })
+        : connected ? primary(T('ai.continueBtn'), function () {
+          var cur = P().provider;
+          if (cur && cur.id === 'openai' && cur.auth === 'oauth') afterConnect(where);
+          else B.choose({ provider: 'openai', model: p.models[0].id }).then(function (r) {
+            if (r && r.ok) return refreshStatus().then(function () { afterConnect(where); });
+            st.oauthResult = { ok: false, error: 'failed' }; rerender();
+          });
+        }, { fk: 'continue' })
+          : chatgptButton(function () { startChatGPT(st, where); }),
+      result && result.error === 'usage_limit' ? small(T('chatgpt.usageBtn'), openLink('openai.usage'), { fk: 'chatgpt-usage' }) : null,
+      btn(T('chatgpt.keyBtn'), function () { st.apiKey = true; st.oauthResult = null; rerender(); }, 'btn-link', { fk: 'chatgpt-key' }));
   }
   /** The result slot: one line, under the actions, reserved so its first line doesn't move them. */
   function slotLine(st, where) {
     var line = null;
+    if (st.pick === 'openai' && !st.apiKey) {
+      var r = st.oauthResult;
+      var text = st.busy === 'oauth' ? T('chatgpt.waitingLine') : r && r.ok ? T('chatgpt.welcome')
+        : r && r.error !== 'cancelled' ? T(F.hasString('chatgpt.' + r.error) ? 'chatgpt.' + r.error : 'chatgpt.failed') : '';
+      return h('div', { class: 'result-slot', id: 'result-slot', 'data-key': 'slot', role: 'status' },
+        text ? resultLine(r && r.ok ? 'ok' : r && r.error !== 'cancelled' ? 'bad' : 'neutral', text, r) : null);
+    }
     if (st.slot) { var k = keyResult(st.slot, where); line = resultLine(k.kind, k.line, st.slot); }
     else if (st.hiddenAi) line = resultLine('warn', T('ai.hiddenLine', { ai: aiName(st.hiddenAi) }), null);
     return h('div', { class: 'result-slot', id: 'result-slot', 'data-key': 'slot' }, line);
@@ -1980,8 +2056,8 @@
     var k = (p && p.key) || {};
     var needs = p && !isCustom(pid) && !isLocal(pid) && !st.slot && !st.hiddenAi && !(k.saved && k.state === 'ok') && !rejectedKey(k);
     return h('div', { class: 'pick-head', 'data-key': 'pick-head' },
-      h('div', { class: 'title-row', 'data-key': 'title-row' }, title(text), detailsBtn(isCustom(pid) ? customSheet : aiSheet(pid))),
-      para(needs ? PT(pid, 'creditLead', namesOf(pid)) || T('ai.creditLead', namesOf(pid)) : '', 'lead lead-slot'));
+      h('div', { class: 'title-row', 'data-key': 'title-row' }, title(text), detailsBtn(pid === 'openai' && !st.apiKey ? chatgptSheet : isCustom(pid) ? customSheet : aiSheet(pid))),
+      para(pid === 'openai' && !st.apiKey ? T('chatgpt.lead') : needs ? PT(pid, 'creditLead', namesOf(pid)) || T('ai.creditLead', namesOf(pid)) : '', 'lead lead-slot'));
   }
   /**
    * The welcome (a first run only): what Bones does for your questing, in the game's own frame, and
@@ -2005,6 +2081,7 @@
   function noKeyBox(st) {
     var pid = st.pick;
     var p = providerById(pid);
+    if (pid === 'openai' && !st.apiKey) return null;
     if (!st.noKey || !p || isCustom(pid) || isLocal(pid) || st.busy || (st.slot && !NO_KEY_YET[st.slot.error]) || (p.key && p.key.saved)) return null;
     var v = namesOf(pid);
     var steps = [T('ai.keyStepSignIn', v), PT(pid, 'creditStep', v), PT(pid, 'createStep', v), T('ai.keyStepBack', v)].filter(Boolean);
@@ -2695,9 +2772,10 @@
       ico('spark', 'aistrip-ico'),
       data('span', { class: 'aistrip-model', text: model }),
       prov ? dot() : null,
-      prov && t.unknown ? h('span', { class: 'aistrip-spent', text: T('home.todayUnknownLine') }) : null,
-      prov && !t.unknown ? data('span', { class: 'aistrip-spent', text: t.capSet ? T('home.todayOfLimitLine', { amount: F.usdMicros(t.spent), limit: F.usdMicros(t.cap) }) : T('home.todayLine', { amount: F.usdMicros(t.spent) }) }) : null,
-      prov && t.capSet && !t.unknown ? xpBar(t.spent, t.cap) : null,
+      prov && prov.auth === 'oauth' ? h('span', { class: 'aistrip-spent', text: T('chatgpt.usingPlan') }) :
+        prov && t.unknown ? h('span', { class: 'aistrip-spent', text: T('home.todayUnknownLine') }) :
+          prov ? data('span', { class: 'aistrip-spent', text: t.capSet ? T('home.todayOfLimitLine', { amount: F.usdMicros(t.spent), limit: F.usdMicros(t.cap) }) : T('home.todayLine', { amount: F.usdMicros(t.spent) }) }) : null,
+      prov && prov.auth !== 'oauth' && t.capSet && !t.unknown ? xpBar(t.spent, t.cap) : null,
       ico('chevron', 'aistrip-go'));
   }
   PAGES.home = function () {
@@ -2822,6 +2900,7 @@
   function yourAiSheet(u, prov) {
     return function () {
       var cur = P().provider;
+      if (cur && cur.auth === 'oauth') return chatgptSheet();
       var base = aiSheet(cur ? cur.id : null)();
       var spend = u ? usageSheet(u.today || P().usage || {}, prov)() : null;
       var tail = base.sections.slice(-1);
@@ -2946,6 +3025,7 @@
       }
       var local = isLocal(cur.id);
       var custom = isCustom(cur.id);
+      var subscription = cur.id === 'openai' && cur.auth === 'oauth';
       var k = (providerById(cur.id) || {}).key || {};
       // A key a test just rejected, or the card says so, reads Rejected, never a green Saved (CL-player-42).
       var rejected = cur.keyState === 'invalid' || cur.keyState === 'expired' || view() === 'key_invalid' || view() === 'signed_out' || !!(ya.nowTest && !ya.nowTest.ok && ya.nowTest.error === 'auth_invalid');
@@ -2965,7 +3045,7 @@
       var rt0 = ya.nowTest;
       var retiredLine = retiredNow && rt0 && !rt0.ok && stillId('model_retired', rt0) ? rowLine('bad', T(stillId('model_retired', rt0), stillVars()), rt0) : null;
       var keyRow = null;
-      if (!keyless) {
+      if (!keyless && !subscription) {
         // Out of credit reads No credit (CL-player-55); a key that works has no chip: the mask says it's saved.
         var chipNode = rejected ? chip(Y('rejectedChip'), 'bad') : cur.keyState === 'no_credit' || view() === 'out_of_credit' ? chip(Y('noCreditChip'), 'warn') : cur.keyState === 'missing' ? chip(Y('missingChip'), 'bad') : null;
         var nt = ya.nowTest;
@@ -2985,6 +3065,17 @@
         keyRow = stackRow('key-row', Y('keyLabel'),
           [h('span', { class: 'set-main key-main' }, data('span', { class: 'mono key-mask', text: F.clean(k.masked || '', 40) }), chipNode), ntLine],
           h('div', { class: 'row' }, test, repl, k.saved ? deleteKeyBtn(cur.id, 'btn btn-quiet btn-sm btn-danger') : null), 'set-rec', ya.replace && !custom ? replaceBox(cur.id) : null);
+      }
+      if (subscription) {
+        var account = (providerById('openai') || {}).chatgpt || {};
+        keyRow = stackRow('account-row', T('chatgpt.accountLabel'),
+          h('span', { class: 'set-main' }, data('span', { text: F.clean(account.account && (account.account.email || account.account.name) || T('chatgpt.accountName'), 80) }),
+            account.connected && !rejected ? chip(T('ai.connectedChip'), 'ok') : null),
+          h('div', { class: 'row' },
+            small(T('chatgpt.switchBtn'), function () { reconnectChatGPT({ newAccount: true }); }, { fk: 'chatgpt-switch' }),
+            account.connected ? busyBtn(T('chatgpt.signOutBtn'), function () {
+              return B.signOutChatGPT().then(function (r) { ya.signOut = r; return refreshStatus(); }).then(function () { rerender(); });
+            }, 'btn btn-quiet btn-sm', { fk: 'chatgpt-signout' }) : small(T('chatgpt.connectBtn'), function () { reconnectChatGPT(); }, { fk: 'chatgpt-reconnect' })), 'set-rec');
       }
       // The model: the recommended one, the one in use and the cheapest; the rest one click away.
       var modelRow = null;
@@ -3050,7 +3141,9 @@
         session,
         group(null, [aiRow, keyRow], 'ai-group'),
         modelBlock,
-        spendGroup(u, caps, cur),
+        subscription ? group(null, [stackRow('plan-row', T('chatgpt.usageLabel'), h('span', { class: 'set-main', text: T('chatgpt.usingPlan') }),
+          small(T('chatgpt.usageBtn'), openLink('openai.usage'), { fk: 'chatgpt-usage' }), 'set-rec')], 'plan-group') : spendGroup(u, caps, cur),
+        ya.signOut && ya.signOut.revoked === false ? notice('warn', T('chatgpt.revokeFailed'), null) : null,
       ]);
     });
   };

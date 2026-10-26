@@ -57,6 +57,31 @@ async function pick(r, id) { await r.press(fk(r, `card-${id}`)); }
 async function paste(r, text, where = 'paste-key') { r.setClipboard(text); await r.press(fk(r, where)); }
 const atWow = (state = {}, o = {}) => pageRig({ onboarded: false, state: { ...CONNECTED, ...state }, appState: AT('wow'), ...o });
 
+test('ChatGPT plan sign-in can be cancelled, acknowledges success and shows account usage without API spending', async () => {
+  const r = await pageRig({ onboarded: false });
+  await pick(r, 'openai');
+  r.mock.control.hold('connectChatGPT');
+  await r.press(fk(r, 'chatgpt-connect'));
+  assert.match(r.pageText(), /Finish signing in in your browser/);
+  await r.press(fk(r, 'chatgpt-cancel'));
+  assert.ok(fk(r, 'chatgpt-connect'));
+  await r.press(fk(r, 'chatgpt-connect'));
+  assert.match(r.pageText(), /You’re using your ChatGPT plan/);
+  assert.equal(titleText(r), 'Connect your AI');
+  await r.press(fk(r, 'chatgpt-done'));
+  assert.equal(titleText(r), 'Set up WoW');
+  const a = await pageRig({ hash: 'provider', state: { choice: { provider: 'openai', model: 'gpt-6-luna', effort: 'low' }, addonInstalled: true,
+    chatgpt: { connected: true, account: { id: 'oaiapp_fixture', email: 'player@example.test' }, accounts: [] } } });
+  assert.match(a.pageText(), /player@example.test/);
+  assert.match(a.pageText(), /Using ChatGPT plan/);
+  assert.doesNotMatch(a.pageText(), /Daily spend|Paste OpenAI|\$[0-9]/);
+  await a.press(fk(a, 'chatgpt-usage'));
+  assert.ok(a.opened.includes('https://chatgpt.com/settings/usage'));
+  await a.press(fk(a, 'chatgpt-signout'));
+  assert.ok(fk(a, 'chatgpt-reconnect'));
+  assert.equal(fk(a, 'chatgpt-signout'), null);
+});
+
 // ---------------------------------------------------------------------------
 // NeverQuestAlone's panel and the tracker.
 
@@ -202,7 +227,7 @@ test('step 2: five rows from the manifests (a name, its company, a day’s cost)
   const rows = group.querySelectorAll('.choice');
   assert.deepEqual(rows.map(c => c.querySelector('.choice-title').textContent), ['Claude', 'ChatGPT', 'Grok', 'Gemini', 'Other']);
   assert.equal(rows.filter(c => c.querySelector('.choice-maker')).length, 0, 'a row is its name and its cost: the company is on the button (the app trim)');
-  assert.deepEqual(rows.map(c => c.querySelector('.choice-cost').textContent), ['$0.76–1.22 a day', '$0.74–1.22 a day', '$0.62–1.00 a day', '$0.29–0.46 a day', 'Cost varies'], 'each AI\'s default (fix-102), from the price table');
+  assert.deepEqual(rows.map(c => c.querySelector('.choice-cost').textContent), ['$0.76–1.22 a day', 'Your ChatGPT plan', '$0.62–1.00 a day', '$0.29–0.46 a day', 'Cost varies'], 'API prices and ChatGPT plan usage');
   assert.ok(rows.every(c => c.getAttribute('role') === 'radio'));
   assert.deepEqual(rows.map(c => c.getAttribute('aria-checked')), ['true', 'false', 'false', 'false', 'false'], 'Claude picked on a fresh run');
   assert.deepEqual(rows.map(c => c.getAttribute('tabindex')), ['0', '-1', '-1', '-1', '-1'], 'a roving tab stop');
@@ -225,6 +250,8 @@ test('step 2: five rows from the manifests (a name, its company, a day’s cost)
   // ChatGPT's first link is its credit page; a hidden AI has no row.
   await pick(r, 'openai');
   assert.equal(picked(r), 'card-openai');
+  assert.deepEqual(primaries(r).map(label), ['Continue with ChatGPT']);
+  await r.press(fk(r, 'chatgpt-key'));
   assert.deepEqual(primaries(r).map(label), ['Paste OpenAI key']);
   assert.ok(r.byText('Open OpenAI’s key page').length, 'one key link, the same words for every AI (player-29)');
   assert.equal(r.appState().setup.provider, 'openai', 'the pick is saved for a reopen');
@@ -295,6 +322,7 @@ test('step 2, Show details: the sheet scoped to the AI picked (cost, your key, w
   for (const [id, want] of [['xai', /xAI charges \$0\.05 for each request it refuses/], ['google', /18 or older/], ['openai', /Add \$5 of credit at OpenAI first/]]) {
     const s = await pageRig({ onboarded: false });
     await pick(s, id);
+    if (id === 'openai') await s.press(fk(s, 'chatgpt-key'));
     await s.press(fk(s, 'details'));
     assert.match(s.sheetText(), want, id);
   }
@@ -344,6 +372,7 @@ test('Paste detects: a key from another AI picks its row and connects it (no “
   assert.equal(picked(r), 'card-openai', 'the row the key belongs to');
   const g = await pageRig({ onboarded: false });
   await pick(g, 'openai');
+  await g.press(fk(g, 'chatgpt-key'));
   await paste(g, `AIza${'C'.repeat(35)}`);
   wentOn(g, 'Gemini is connected.');
   await g.press(fk(g, 'back'));
@@ -1084,6 +1113,7 @@ test('onboarding review (2026-10-05): No key yet? opens the picked AI’s key in
     'Click Open Anthropic’s key page, then sign in or make an account.', 'Add $5 of credit.', 'Click Create key, then Copy.', 'Come back to this window and click Paste Anthropic key.']);
   assert.doesNotMatch(box().textContent, /Claude Pro/, 'the subscriptions’ line stays in Show details (the box fits at 760×540)');
   await pick(r, 'openai');
+  await r.press(fk(r, 'chatgpt-key'));
   assert.match(box().textContent, /Click Create new secret key, then Copy\./, 'OpenAI’s own button');
   // A paste with no key in it keeps the help, and its box (OB-03).
   await paste(r, '');

@@ -160,7 +160,9 @@ export function createMockApi({ now = Date.now, platform = process.platform, del
   const find = (id) => {
     const p0 = PROVIDERS.find(x => x.id === id);
     // More models than the data files carry today (a scene or test of a longer list): appended.
-    const p = p0 && Array.isArray(s.extraModels?.[id]) ? { ...p0, models: [...p0.models, ...s.extraModels[id]] } : p0;
+    let p = p0 && Array.isArray(s.extraModels?.[id]) ? { ...p0, models: [...p0.models, ...s.extraModels[id]] } : p0;
+    if (id === 'openai' && s.chatgpt) p = { ...p, auth: 'oauth', chatgpt: s.chatgpt,
+      models: p.models.map(m => ({ ...m, priceHint: null, levelDays: undefined, older: false })) };
     if (!p || p.id !== 'custom') return p;
     const c = customNow();
     if (!c) return p;
@@ -174,6 +176,7 @@ export function createMockApi({ now = Date.now, platform = process.platform, del
     if (s.paused) return 'paused';
     if (!s.choice) return 'no_key';
     const p = find(s.choice.provider);
+    if (p.auth === 'oauth') return s.chatgpt.connected ? 'ready' : 'key_invalid';
     // Other's key is optional: the service it names decides (a key it rejected is rejected all the same).
     if (!isLocalP(p)) {
       const k = s.keys.get(p.id);
@@ -202,7 +205,7 @@ export function createMockApi({ now = Date.now, platform = process.platform, del
     return {
       id: p.id, name: p.name, model: m.id, modelName: m.name, effort: s.choice.effort, effortSupported: !!m.effort,
       ...(m.efforts?.length ? { efforts: m.efforts.join(' ') } : {}),
-      auth: isLocalP(p) ? 'local' : p.auth === 'custom' ? 'key' : p.auth, keyState: isLocalP(p) || p.auth === 'custom' ? (k && k.state === 'invalid' ? 'invalid' : 'ok') : (k ? (k.state === 'invalid' ? 'invalid' : s.keyState[p.id] === 'no_credit' ? 'no_credit' : 'ok') : 'missing'),
+      auth: isLocalP(p) ? 'local' : p.auth === 'custom' ? 'key' : p.auth, keyState: p.auth === 'oauth' ? s.chatgpt.connected ? 'ok' : 'expired' : isLocalP(p) || p.auth === 'custom' ? (k && k.state === 'invalid' ? 'invalid' : 'ok') : (k ? (k.state === 'invalid' ? 'invalid' : s.keyState[p.id] === 'no_credit' ? 'no_credit' : 'ok') : 'missing'),
       privacy: p.privacyCard.class, product: 'NeverQuestAlone', companion: s.companion ?? 'NeverQuestAlone',
     };
   }
@@ -342,6 +345,20 @@ export function createMockApi({ now = Date.now, platform = process.platform, del
 
   const api = {
     mock: true,
+    async connectChatGPT() {
+      s.oauthCancelled = false;
+      await gate('connectChatGPT'); await wait();
+      if (s.oauthCancelled) return { ok: false, error: 'cancelled' };
+      const forcedResult = forced('connectChatGPT');
+      if (forcedResult) return forcedResult;
+      const account = { id: 'oaiapp_fixture', email: 'player@example.test', name: 'Player', label: 'Player', active: true, connected: true };
+      s.chatgpt = { connected: true, account, accounts: [account] };
+      s.choice = { provider: 'openai', model: 'gpt-6-luna', effort: 'low' };
+      changed();
+      return { ok: true, provider: 'openai', model: s.choice.model, account };
+    },
+    async cancelChatGPT() { s.oauthCancelled = true; holds.get('connectChatGPT')?.release(); return { ok: true }; },
+    async signOutChatGPT() { s.chatgpt = { ...s.chatgpt, connected: false }; changed(); return { ok: true, revoked: true }; },
     async status() { return clone(status()); },
     async providers() {
       return clone(PROVIDERS.map(x => find(x.id)).map(p => {

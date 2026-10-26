@@ -658,7 +658,9 @@ export function createProvider(manifest, opts = {}) {
   async function credentials() {
     if (!manifest.auth) return { key: null, kind: 'local', headers: {} };
     let got;
-    try { got = await getKey(id); } catch { return { error: noKey('keystore_error') }; }
+    try { got = await getKey(id); } catch (e) {
+      return { error: manifest.subscription ? makeError({ kind: e.code === 'oauth_expired' ? 'oauth_expired' : 'overloaded', provider: id, retryable: false }) : noKey('keystore_error') };
+    }
     const key = typeof got === 'string' ? got : got?.key;
     // Other (custom) may run with no key: a server on this computer takes none.
     if (!key && manifest.auth.optional === true) return { key: null, kind: 'none', headers: {} };
@@ -711,7 +713,7 @@ export function createProvider(manifest, opts = {}) {
     for (let page = 0; route && page < 10; page++) {
       const r = await getJSON(route, signal, cred);
       if (!r.ok) { logError(r.error); return r; }
-      const { ids, next } = adapter.modelsPage(r.json, route);
+      const { ids, next } = adapter.modelsPage(r.json, route, cred.kind);
       models.push(...ids);
       route = next;
     }
@@ -773,7 +775,7 @@ export function createProvider(manifest, opts = {}) {
       // so it's dropped.
       let target, payload;
       try {
-        target = adapter.chatRequest(wire, req, { authHeaders: { ...extraHeaders, ...cred.headers }, requestOptions, path: chatPath });
+        target = adapter.chatRequest(wire, req, { authHeaders: { ...extraHeaders, ...cred.headers }, requestOptions, path: chatPath, auth: cred.kind });
         payload = JSON.stringify(target.body);
         new Headers(target.headers);
       } catch {
