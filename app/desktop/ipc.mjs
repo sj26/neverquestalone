@@ -10,11 +10,12 @@
 //     what needs live data (a provider it lists, a model it offers, a folder
 //     that holds WoW);
 //   - raising or turning off the player's daily spend limit, saving or deleting
-//     a key, switching the AI, starting a sign-in, forgetting memory and
+//     a key, switching the AI, forgetting memory and
 //     uninstalling each need a native main-process confirm (TH21), whose text is
 //     built here from checked input and fixed tables, never from renderer text.
 //     Setting a first limit or lowering one, or picking another model at the
-//     same AI company, needs none (D-12);
+//     same AI company, needs none (D-12). ChatGPT sign-in opens the browser
+//     directly; OpenAI handles account selection and consent there;
 //   - a pasted key is read off the clipboard here (pasteKey; the page never reads
 //     a paste, code health AP-05), a typed one comes straight here (stageKey); it
 //     is held only in memory for five minutes, and is never sent back: every
@@ -61,6 +62,7 @@ export const LINKS = Object.freeze({
   'verify.lulu': 'https://objective-see.org/products/lulu.html',
   'verify.tcpview': 'https://learn.microsoft.com/en-us/sysinternals/downloads/tcpview',
   'verify.opensnitch': 'https://github.com/evilsocket/opensnitch',
+  'openai.usage': 'https://chatgpt.com/settings/usage',
   'credits.upstream': 'https://github.com/chelinho139/wow-ai',
   'credits.codex': 'https://github.com/0xinuarashi/wow-forever-codex',
   'blizzard.trademarks': 'https://www.blizzard.com/en-us/legal/38fd0408-8431-469a-99bc-2cd9eb9462c8/blizzard-entertainment-trademark-usage-guidelines',
@@ -346,7 +348,7 @@ export function aiNames(id) {
 function setupModel(p, id) {
   const m = manifestOf(id);
   const want = m?.models?.default;
-  const models = Array.isArray(p?.models) ? p.models : [];
+  const models = p?.apiModels ?? (Array.isArray(p?.models) ? p.models : []);
   const e = models.find(x => x && x.id === want) ?? models[0];
   return cleanName(e?.name || want || '') || null;
 }
@@ -560,6 +562,16 @@ export const HANDLERS = {
     },
   },
   providers: { input: NONE, run: ctx => ctx.api.providers() },
+  connectChatGPT: {
+    input: obj({ account: { type: 'string', maxLength: 128, pattern: /^oaiapp_[A-Za-z0-9_-]+$/ }, newAccount: BOOL }, []),
+    run: (ctx, v) => ctx.api.connectChatGPT(v),
+  },
+  cancelChatGPT: { input: NONE, run: ctx => ctx.api.cancelChatGPT() },
+  signOutChatGPT: {
+    input: NONE,
+    confirm: () => ({ message: 'Sign out of ChatGPT?', detail: 'NeverQuestAlone will stop using this ChatGPT account.', okLabel: 'Sign out' }),
+    run: ctx => ctx.api.signOutChatGPT(),
+  },
   appInfo: { input: NONE, run: ctx => ctx.info() },
   notices: { input: NONE, run: ctx => ctx.notices() },
   appState: { input: NONE, run: ctx => ctx.appState.get() },

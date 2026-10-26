@@ -877,3 +877,7 @@ h1 + .group, .lead + .group { margin-top: 24px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+.chatgpt-signin { background: #fff; color: #0d0d0d; border-color: #fff; gap: 10px; }
+.chatgpt-signin:hover, .chatgpt-signin:active { background: #eee; border-color: #eee; }
+.chatgpt-logo { flex: none; width: 24px; height: 24px; background: url(img/chatgpt.svg) center / contain no-repeat; }

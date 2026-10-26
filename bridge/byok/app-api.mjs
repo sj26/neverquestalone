@@ -72,7 +72,7 @@ export { TYPICAL_TURN };
  * table, the settings, the core's store ('bridge', the default state), and on Windows the WoW
  * folders the addon went into, for the NSIS uninstaller (uninstall.ini; audit CV-07).
  */
-export const APP_DATA = Object.freeze(['transcripts', MEMORY_DIR, 'ledger.json', 'caps.json', 'usage-history.json', 'byok-chats.json', 'config.json', 'bridge', UNINSTALL_RECORD]);
+export const APP_DATA = Object.freeze(['transcripts', MEMORY_DIR, 'ledger.json', 'caps.json', 'usage-history.json', 'byok-chats.json', 'config.json', 'chatgpt.enc', 'bridge', UNINSTALL_RECORD]);
 
 const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const bad = detail => ({ ok: false, error: 'bad_input', ...(detail ? { detail } : {}) });
@@ -156,6 +156,10 @@ const RT_KINDS = new Set(['auth_invalid', 'oauth_expired', 'no_key', 'rate_limit
  * errors are the start-time check's notice, and in-game fixes (a new chat, send again) stay in game.
  */
 export function lastErrorView(err, names = {}) {
+  if (err?.code === 'subscription_sharing_usage_limit_exceeded') return {
+    kind: err.kind, code: err.code, at: Number.isFinite(err.at) ? err.at : null,
+    headline: 'ChatGPT usage limit reached.', detail: null, action: null,
+  };
   if (!isObj(err) || typeof err.kind !== 'string' || RT_KINDS.has(err.kind) || err.kind === 'model_not_found') return null;
   const u = userLine(err, { ...names, product: names.product ?? PRODUCT, final: true });
   if (!u.action?.desktop && !ON_THIS_COMPUTER.has(err.kind) && !WINDOW_FIX.has(err.kind)) return null;
@@ -291,7 +295,7 @@ const slotsOf = config => Number(config?.transport?.slots) || SLOT_COUNT;
 
 export function createAppApi(opts = {}) {
   const {
-    keystore, config, paths = {}, log = () => {}, openExternal = null, egress = null, saveConfig = null,
+    keystore, config, paths = {}, log = () => {}, openExternal = null, egress = null, saveConfig = null, chatgpt = null,
     fetch = globalThis.fetch, platform = process.platform, env = process.env, home = os.homedir(), now = Date.now,
     logLines = () => [], restart = null, halt = null, wow = {}, keystoreNote = null, version = null, settingsReset = false,
     patchDay = () => null,
@@ -340,7 +344,8 @@ export function createAppApi(opts = {}) {
   config.capture = isObj(config.capture) ? config.capture : {};
 
   // Other's manifest is built from the player's settings (byok.custom), so it's null until they're set.
-  const manifest = id => manifestFor(id, manifests, B().custom);
+  const manifest = id => id === 'openai' && B().authBy.openai === 'oauth' && chatgpt
+    ? chatgpt.manifest() : manifestFor(id, manifests, B().custom);
   const visible = id => { const m = manifest(id); return m && !m.hidden ? m : null; };
   const isCustom = m => m?.custom === true;
   /** Other's service by its host ("openrouter.ai", "localhost:11434"): the name the window gives it. */
@@ -467,8 +472,8 @@ export function createAppApi(opts = {}) {
     const list = (m.models?.list ?? []).map(e => ({
       id: e.id, name: e.label || e.id,
       tier: e.id === m.models.default ? 'default' : e.id === m.models.smarter ? 'smarter' : 'other',
-      effort: e.effort === true, efforts: e.effort === true ? effortLevels(m, e.id) : [], priceHint: priceHint(m, e),
-      levelDays: levelDays(m, e), costRank: Number.isInteger(e.costRank) ? e.costRank : null, older: typeof e.replacedBy === 'string',
+      effort: e.effort === true, efforts: e.effort === true ? effortLevels(m, e.id) : [], priceHint: m.subscription ? null : priceHint(m, e),
+      levelDays: m.subscription ? undefined : levelDays(m, e), costRank: Number.isInteger(e.costRank) ? e.costRank : null, older: !m.subscription && typeof e.replacedBy === 'string',
     }));
     return list;
   }
@@ -585,7 +590,7 @@ export function createAppApi(opts = {}) {
       const t = await prov.testCall({ model, signal: AbortSignal.timeout(60_000) });
       if (!t.ok) return failure(t.error, m, model);
       let micros = 0;
-      try { micros = m.local ? 0 : costMicros(t.usage ?? {}, priceBook.priceFor(provider, model, now())); } catch { micros = 0; }
+      try { micros = m.local || m.subscription ? 0 : costMicros(t.usage ?? {}, priceBook.priceFor(provider, model, now())); } catch { micros = 0; }
       if (saved && B().provider === provider) {
         try { await S.backend?.refresh?.({ keyChanged: true }); } catch { /* status only */ }
         // What the player fixed at the provider (credit, a spend limit, a region) is fixed: the card goes (D-32, D-38).
@@ -911,6 +916,34 @@ export function createAppApi(opts = {}) {
       return out;
     },
 
+    async connectChatGPT(v = {}) {
+      if (!chatgpt || down()) return { ok: false, error: 'unsupported' };
+      try {
+        const result = await chatgpt.connect(v);
+        B().authBy.openai = 'oauth';
+        const m = chatgpt.manifest();
+        const effort = startEffort(m, result.model);
+        await S.backend?.setConfig?.({ provider: 'openai', model: result.model, auth: 'oauth', effort });
+        Object.assign(B(), { provider: 'openai', model: result.model, auth: 'oauth', effort });
+        persist();
+        await S.backend?.refresh?.({ keyChanged: true });
+        afterPassingTest();
+        changed();
+        return { ok: true, provider: 'openai', model: result.model, account: result.account };
+      } catch (e) { changed(); return { ok: false, error: e.code || 'oauth_failed' }; }
+    },
+
+    async cancelChatGPT() { chatgpt?.cancel(); return { ok: true }; },
+
+    async signOutChatGPT() {
+      if (!chatgpt) return { ok: false, error: 'unsupported' };
+      const result = await chatgpt.signOut();
+      // Remain in plan mode: signing out must not activate a saved, billable API key.
+      await S.backend?.refresh?.({ keyChanged: true });
+      changed();
+      return { ok: true, ...result };
+    },
+
     async providers() {
       const out = [];
       for (const t of manifests) {
@@ -933,12 +966,14 @@ export function createAppApi(opts = {}) {
           continue;
         }
         const local = t.local === true;
+        const m = manifest(t.id) ?? t;
         out.push({
           id: t.id,
           name: t.name,
           hidden: !!t.hidden,
-          auth: local ? 'local' : 'key',
-          models: modelsOf(t),
+          auth: local ? 'local' : m.subscription ? 'oauth' : 'key',
+          ...(t.id === 'openai' && chatgpt ? { chatgpt: chatgpt.view(), apiModels: modelsOf(t) } : {}),
+          models: modelsOf(m),
           ...playerCard(t),
           terms: { link: linkId(t, local ? 'privacy' : 'terms'), recorded: termsOk(t) },
           key: local ? null : await keyView(t.id),
@@ -970,7 +1005,7 @@ export function createAppApi(opts = {}) {
     async testKey(provider) {
       const m = visible(provider);
       if (!m) return bad('provider');
-      return runTest(m, id => keystore.get(id), { saved: true });
+      return runTest(m, id => m.subscription ? chatgpt.accessToken().then(key => ({ key, kind: 'oauth' })) : keystore.get(id), { saved: true });
     },
 
     /**
@@ -980,8 +1015,8 @@ export function createAppApi(opts = {}) {
      * the shell stores the new one only after this passes.
      */
     async testStagedKey(provider, getKey, o = {}) {
-      const m = visible(provider);
-      if (!m || m.local || isCustom(m)) return bad('provider');
+      const m = manifestFor(provider, manifests, B().custom);
+      if (!m || m.hidden || m.local || isCustom(m)) return bad('provider');
       // Nothing goes to an AI company before its terms are recorded (onboarding spec §9.3).
       if (!termsOk(m)) return { ok: false, error: 'terms_required' };
       let key = null;
@@ -1064,7 +1099,7 @@ export function createAppApi(opts = {}) {
       // Saved as the level the model runs at: its nearest to the one asked for (a level picked for
       // another model), none for a model without levels, and none asked stays none (the model's own).
       const effort = v.effort == null ? null : nearestEffort(effortLevels(m, v.model), v.effort);
-      const auth = 'key';
+      const auth = B().authBy[m.id] === 'oauth' ? 'oauth' : 'key';
       // Other's model is part of its service's settings: a new one is saved with them.
       const custom = isCustom(m) ? { baseUrl: m.baseUrl, model: v.model } : undefined;
       if (custom) B().custom = custom;
@@ -1540,6 +1575,8 @@ export function createAppApi(opts = {}) {
       if (removeAddon && await wowRunningNow(true)) return { ok: false, error: 'wow_running', detail: RUNNING_LINE };
       const removed = [];
       let keys = 0;
+      chatgpt?.stop();
+      try { await keystore.delete('chatgpt-vault'); } catch { /* the store may be unavailable */ }
       // Every provider's key, and one saved for an AI Other (custom) replaced (an OpenRouter key boot couldn't move).
       for (const id of [...manifests.filter(m => !m.local).map(m => m.id), ...Object.keys(LEGACY_CUSTOM)]) {
         try { if (await keystore.delete(id)) keys += 1; } catch { /* nothing saved, or the store is gone */ }
@@ -1618,8 +1655,8 @@ export function createAppApi(opts = {}) {
      * picks its default model (thinking low). → {ok, masked, model, first} | {ok: false, error}.
      */
     async connect(provider, key, o = {}) {
-      const m = visible(provider);
-      if (!m || m.local || isCustom(m)) return bad('provider');
+      const m = manifestFor(provider, manifests, B().custom);
+      if (!m || m.hidden || m.local || isCustom(m)) return bad('provider');
       const k = typeof key === 'string' ? key.trim() : null;
       const problem = keyProblem(m, k);
       if (problem) return problem;
@@ -1658,15 +1695,16 @@ export function createAppApi(opts = {}) {
      * the AI is the one in use. → {ok, masked, testCall} | a setup failure | {ok:false, error:'read_failed'}.
      */
     async useSavedKey(provider) {
-      const m = visible(provider);
-      if (!m || m.local || isCustom(m)) return bad('provider');
+      const m = manifestFor(provider, manifests, B().custom);
+      if (!m || m.hidden || m.local || isCustom(m)) return bad('provider');
       if (!termsOk(m)) return { ok: false, error: 'terms_required' };
       let key = null;
       try { key = await keystore.get(provider); } catch { return { ok: false, error: 'read_failed' }; }
       if (!key) return { ok: false, error: 'no_key' };
       const t = await runTest(m, async () => key, { saved: true, context: 'setup' });
       if (t?.ok !== true) return t;
-      if (B().provider !== provider) {
+      B().authBy[provider] = 'key';
+      if (B().provider !== provider || B().auth !== 'key') {
         const want = m.models?.default;
         const r = await api.choose({ provider, model: want, effort: startEffort(m, want) });
         if (r?.ok !== true) return { ok: false, error: 'failed' };

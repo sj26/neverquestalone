@@ -43,10 +43,10 @@ async function readAll(body, limit = 1 << 20) {
 
 // ---- Responses API -------------------------------------------------------------
 
-export function responsesRequest(manifest, req, { authHeaders = {}, requestOptions = null, path } = {}) {
+export function responsesRequest(manifest, req, { authHeaders = {}, requestOptions = null, path, auth } = {}) {
   const input = [];
   const sys = systemText(req.system);
-  if (sys) input.push({ role: 'system', content: sys });
+  if (sys) input.push({ role: auth === 'oauth' ? 'developer' : 'system', content: sys });
   for (const m of req.messages || []) input.push({ role: m.role, content: String(m.content ?? '') });
   const core = { model: req.model, input, max_output_tokens: req.maxTokens ?? manifest.limits.maxOutputTokens };
   const body = requestBody(manifest.defaultRequestOptions, effortFragment(manifest, req.model, req.effort), requestOptions, core);
@@ -60,6 +60,15 @@ export function responsesRequest(manifest, req, { authHeaders = {}, requestOptio
   }
   if (manifest.safetyIdentifier && req.safetyId) body.safety_identifier = String(req.safetyId);
   else delete body.safety_identifier;
+  if (auth === 'oauth') {
+    // This route has a smaller request contract than API-key Responses. In particular, no
+    // output cap, stored conversation, safety identifier, or API billing options cross modes.
+    return target(manifest, path || manifest.paths.chat, authHeaders, {
+      model: req.model, input, stream: true, store: false,
+      ...(body.reasoning ? { reasoning: body.reasoning } : {}),
+      ...(body.include ? { include: body.include } : {}),
+    });
+  }
   return target(manifest, path || manifest.paths.chat, authHeaders, body);
 }
 
@@ -95,6 +104,10 @@ export async function* responsesParse(res, ctx) {
     } else if (type === 'response.incomplete') {
       const reason = data.response?.incomplete_details?.reason;
       yield { type: 'usage', usage: responsesUsage(data.response?.usage) };
+      if (ctx.manifest.subscription) {
+        yield { type: 'error', error: ctx.error({ kind: 'bad_request', code: 'response_incomplete' }) };
+        return;
+      }
       yield { type: 'done', finish: reason === 'content_filter' ? 'content_filter' : refused ? 'refusal' : 'length' };
       return;
     } else if (type === 'response.failed' || type === 'error') {
@@ -212,8 +225,9 @@ export async function* chatParse(res, ctx) {
 }
 
 // Gemini's OpenAI-compatible list names its models "models/gemini-…"; requests take the bare id.
-export function modelsPage(json) {
-  const ids = Array.isArray(json?.data) ? json.data.map(m => m?.id).filter(x => typeof x === 'string').map(id => id.replace(/^models\//, '')) : [];
+export function modelsPage(json, route, auth) {
+  const rows = auth === 'oauth' ? (json?.models ?? []).filter(m => m.visibility === 'list').map(m => ({ id: m.slug })) : json?.data;
+  const ids = Array.isArray(rows) ? rows.map(m => m?.id).filter(x => typeof x === 'string').map(id => id.replace(/^models\//, '')) : [];
   return { ids, next: null };
 }
 

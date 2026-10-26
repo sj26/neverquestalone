@@ -92,6 +92,7 @@
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "com.neverquestalone.app"
     !insertmacro nqaDeleteKey anthropic
     !insertmacro nqaDeleteKey openai
+    !insertmacro nqaDeleteKey chatgpt-vault
     !insertmacro nqaDeleteKey xai
     !insertmacro nqaDeleteKey google
     !insertmacro nqaDeleteKey custom

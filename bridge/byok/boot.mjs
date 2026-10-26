@@ -47,6 +47,8 @@ import { publicPaths, captureSocketPath } from './paths.mjs';
 import { findWow, wowRoots, recordAddonFolder, wowRunningAsync, FOREVER_FLAVORS, NOT_GAME } from './wow.mjs';
 import { loadManifests, manifestFor } from './providers/index.mjs';
 import { createKeyStore, SERVICE } from './security/keystore.mjs';
+import { createOAuthStore } from './security/oauth-store.mjs';
+import { createChatGPTOAuth } from './chatgpt-oauth.mjs';
 import { createEgress, isLoopbackHost, normHost } from './security/egress.mjs';
 import { redact } from './security/redact.mjs';
 import { createPriceBook } from './usage/prices.mjs';
@@ -363,6 +365,12 @@ export async function bootByok(opts = {}) {
     // ---- manifests and prices: the bundled ones (a change ships with an app update)
     manifests = givenManifests ?? loadManifests();
     const priceBook = givenPriceBook ?? createPriceBook();
+    const chatgpt = await createChatGPTOAuth({
+      store: createOAuthStore({ keystore, file: path.join(P.userData, 'chatgpt.enc') }),
+      manifest: manifests.find(m => m.id === 'openai'), fetch: netFetch, openExternal,
+      widen: egress.widen, addSecret: s => log.addSecret(s),
+    });
+    undo.push(() => chatgpt.stop());
 
     // ---- the player's privacy choices (§13.1), read where they're used: the core reads byok.privacy
     // itself (automatic turns are opt-in), and withPrivacy below at every send and publish
@@ -373,7 +381,7 @@ export async function bootByok(opts = {}) {
     let api = null;
     const lockDir = givenLockDir ?? pub.state;
     const backendOpts = () => ({
-      config, dataDir: P.userData, keystore, manifests, priceBook, log, fetch: netFetch,
+      config, dataDir: P.userData, keystore, manifests, priceBook, log, fetch: netFetch, chatgpt,
       ...(providerOpts ? { providerOpts } : {}), ...(backendOptions ?? {}),
     });
     // The core's handlers, with the app's status pushes beside them (every handler the core
@@ -629,7 +637,7 @@ export async function bootByok(opts = {}) {
     // ---- the app API
     api = createAppApi({
       bridge: core.bridge, backend: core.backend, capture: core.capture, keystore, config, paths: P, log, openExternal,
-      egress, saveConfig, manifests, priceBook, fetch: netFetch, platform, env, home,
+      egress, saveConfig, manifests, priceBook, fetch: netFetch, platform, env, home, chatgpt,
       logLines: () => log.lines(), restart, halt: stopCore, wow, keystoreNote, version: P.version ?? null,
       settingsReset: !!loaded.reset, patchDay: () => core.patch?.notice() ?? null, configFile, screenReading: applyScreenReading,
     });

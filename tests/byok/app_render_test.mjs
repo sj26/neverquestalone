@@ -99,7 +99,7 @@ test('index.html: a CSP meta with no inline script, no remote anything, and no i
   const urls = [...css.matchAll(/url\(([^)]+)\)/g)].map(m => m[1]);
   assert.ok(urls.length > 10);
   for (const u of urls) {
-    assert.match(u, /^(fonts\/[a-z0-9-]+\.woff2|icons\/[a-z-]+\.svg|img\/bones-(active|inactive)(-64)?(@2x)?\.png)$/, u);
+    assert.match(u, /^(fonts\/[a-z0-9-]+\.woff2|icons\/[a-z-]+\.svg|img\/chatgpt\.svg|img\/bones-(active|inactive)(-64)?(@2x)?\.png)$/, u);
     assert.ok(fs.existsSync(path.join(R, u)), u);
   }
 });
@@ -1015,6 +1015,7 @@ test('Your AI, Change: step 2’s rows here with ‹ Your AI; a key for another 
   assert.ok(r.document.querySelector('.choices'));
   assert.equal(label(fk(r, 'back')), 'Back');
   await r.press(fk(r, 'card-openai'));
+  await r.press(fk(r, 'chatgpt-key'));
   r.setClipboard(`sk-proj-CANARY${'x'.repeat(60)}`);
   await r.press(fk(r, 'paste-key'));
   assert.equal(r.confirms.at(-1).message, 'Switch NeverQuestAlone to ChatGPT with this key?');
@@ -1036,6 +1037,7 @@ test('Your AI, Change: step 2’s rows here with ‹ Your AI; a key for another 
   await sw.press(fk(sw, 'change-ai'));
   assert.equal(fk(sw, 'delete-key'), null, 'Claude is in use: its Delete key is on the Key row');
   await sw.press(fk(sw, 'card-openai'));
+  await sw.press(fk(sw, 'chatgpt-key'));
   assert.equal(label(fk(sw, 'delete-key')), 'Delete key');
   assert.equal(fk(sw, 'delete-key').className, 'btn btn-quiet btn-danger');
   await sw.press(fk(sw, 'delete-key'));

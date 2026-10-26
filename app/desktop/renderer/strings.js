@@ -34,6 +34,32 @@
 // on Windows. A …Win sibling holds a sentence that differs on Windows.
 
 window.BonesStrings = {
+  chatgpt: {
+    lead: 'Use your ChatGPT plan.',
+    plan: 'Your ChatGPT plan',
+    connectBtn: 'Continue with ChatGPT',
+    keyBtn: 'Use an API key',
+    planBtn: 'Use your ChatGPT plan',
+    waitingBtn: 'Waiting for ChatGPT…',
+    waitingLine: 'Finish signing in in your browser.',
+    cancelBtn: 'Cancel',
+    welcome: 'You’re using your ChatGPT plan',
+    gotItBtn: 'Got it',
+    failed: 'Couldn’t connect to ChatGPT. Try again.',
+    oauth_timeout: 'Sign-in timed out. Try again.',
+    consent_required: 'Allow ChatGPT plan usage to continue.',
+    usage_limit: 'ChatGPT usage limit reached.',
+    accountLabel: 'Account',
+    accountName: 'ChatGPT account',
+    usageLabel: 'Usage',
+    usingPlan: 'Using ChatGPT plan',
+    usageBtn: 'Manage usage',
+    signOutBtn: 'Sign out',
+    switchBtn: 'Switch account',
+    addAccount: 'Add account',
+    signInAgain: 'Sign in to ChatGPT again.',
+    revokeFailed: 'Signed out here. Disconnect NeverQuestAlone in ChatGPT settings too.',
+  },
   // The quest tracker in Bones's panel, during setup (spec §4.9). STYLE §1: the three steps by
   // name, in order; never "Step N of M". The diamonds are decoration, drawn by the renderer.
   stage: {

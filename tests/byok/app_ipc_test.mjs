@@ -638,8 +638,15 @@ test('uninstall is confirm-gated and lists what goes', async () => {
   assert.equal((await yes.ipc.call('uninstall', {})).error, 'bad_input');
 });
 
+test('ChatGPT sign-in starts directly without a native confirmation', async () => {
+  const { ipc, confirms } = makeCtx({ confirm: false });
+  assert.equal((await ipc.call('connectChatGPT', {})).ok, true);
+  assert.equal(confirms.length, 0);
+  assert.equal((await ipc.call('signOutChatGPT')).error, 'cancelled', 'sign-out still asks');
+});
+
 test('the confirm-gated calls are exactly the risky ones, and only one dialog shows at a time', async () => {
-  assert.deepEqual([...CONFIRMED].sort(), ['choose', 'connectKey', 'deleteKey', 'forgetMemory', 'installAddon', 'installUpdateNow', 'pasteKey', 'setCaps', 'setRetention', 'connectCustom', 'tightenAddonPermissions', 'transcripts', 'uninstall', 'useSavedKey'].sort());
+  assert.deepEqual([...CONFIRMED].sort(), ['choose', 'connectKey', 'deleteKey', 'forgetMemory', 'installAddon', 'installUpdateNow', 'pasteKey', 'setCaps', 'setRetention', 'connectCustom', 'signOutChatGPT', 'tightenAddonPermissions', 'transcripts', 'uninstall', 'useSavedKey'].sort());
   let release;
   const gate = new Promise(r => { release = r; });
   const { ipc, confirms } = makeCtx({ confirm: () => gate });

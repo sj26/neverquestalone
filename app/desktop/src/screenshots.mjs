@@ -54,6 +54,9 @@ const READY = { keys: SAVED, choice: HAIKU, addonInstalled: true };
 const LIMIT = { caps: { dailyUsd: 1 } };
 const LOOSE = { ok: false, fixable: true, fixed: [], paths: ['/Applications/World of Warcraft/_forever_/Interface/AddOns'], detail: 'Other accounts on this Mac can change /Applications/World of Warcraft/_forever_/Interface/AddOns, so they could run addon code in your game.' };
 const OPENAI_READY = { keys: { openai: { masked: 'sk-proj-…xxxx', state: 'ok' } }, choice: { provider: 'openai', model: 'gpt-6-luna', effort: 'low' }, addonInstalled: true };
+const CHATGPT_ACCOUNT = { id: 'oaiapp_fixture', email: 'player@example.test', name: 'Player', label: 'Player', connected: true, active: true };
+const CHATGPT_READY = { choice: { provider: 'openai', model: 'gpt-6-luna', effort: 'low' }, addonInstalled: true,
+  chatgpt: { connected: true, account: CHATGPT_ACCOUNT, accounts: [CHATGPT_ACCOUNT] } };
 /** An installed app's updater, as About reads it (the screenshot mode's fixture; nothing is fetched). */
 const UPDATER = Object.freeze({ supported: true, configured: true, mode: 'notify', notifyOnly: false, current: '1.2.0', state: 'none', available: null, progress: null, lastCheck: Date.UTC(2026, 9, 2, 9), error: null });
 const CAPTURE_WAITING = { state: 'waiting', mode: 'capture', signals: 'unknown', steps: { game: false, strip: false, message: false, reply: false } };
@@ -191,8 +194,18 @@ export function setupScenes() {
     { id: 'setup-s2-details', caption: 'Step 2, Show details: the sheet “Claude, in detail” over the stage (cost, your key, what leaves your Mac, where it’s kept, terms, the fine print)', state: {}, run: async d => { await toStep2(d); await details(d); } },
     { id: 'setup-s2-details-narrow', caption: 'Step 2’s sheet at 760×540: it scrolls inside itself, the page doesn’t', size: [760, 540], state: {}, run: async d => { await toStep2(d); await details(d); } },
     { id: 'setup-s2-details-narrow-zoom3', caption: 'Step 2’s sheet at 760×540 and zoom level 3: the picture’s ends stack, nothing cut (APP-D-45; scrolled to the picture)', size: [760, 540], state: {}, appState: { zoom: 3 }, run: async d => { await toStep2(d); await details(d); d.note({ flow: await d.evalJs(FLOW_IN_VIEW) }); } },
-    { id: 'setup-s2-chatgpt', caption: 'Step 2 with ChatGPT picked: ChatGPT needs an API key and credit at OpenAI.', state: {}, run: d => pick(d, 'openai') },
-    { id: 'setup-s2-chatgpt-details', caption: 'Step 2, ChatGPT’s sheet: its extras (credit first)', state: {}, run: async d => { await pick(d, 'openai'); await details(d); } },
+    { id: 'setup-s2-chatgpt', caption: 'ChatGPT plan: native sign-in and a separate API key option', state: {}, run: d => pick(d, 'openai') },
+    { id: 'setup-s2-chatgpt-narrow', caption: 'ChatGPT plan at minimum window size', size: [760, 540], state: {}, run: d => pick(d, 'openai') },
+    { id: 'setup-s2-chatgpt-api', caption: 'ChatGPT API key mode', state: {}, run: async d => { await pick(d, 'openai'); await d.clickFk('chatgpt-key'); await d.waitText('Paste OpenAI key'); } },
+    { id: 'setup-s2-chatgpt-waiting', caption: 'Browser sign-in pending, with Cancel', state: {}, run: async d => { await pick(d, 'openai'); d.hold('connectChatGPT'); await d.clickFk('chatgpt-connect'); await d.waitText('Finish signing in in your browser.'); } },
+    { id: 'setup-s2-chatgpt-cancelled', caption: 'Cancel returns to sign-in', state: {}, run: async d => { await pick(d, 'openai'); d.hold('connectChatGPT'); await d.clickFk('chatgpt-connect'); await d.waitText('Finish signing in in your browser.'); await d.clickFk('chatgpt-cancel'); await d.waitSel('[data-fk="chatgpt-connect"]'); } },
+    { id: 'setup-s2-chatgpt-success', caption: 'Verified connection, acknowledged with Got it (fixture)', state: {}, run: async d => { await pick(d, 'openai'); await d.clickFk('chatgpt-connect'); await d.waitText('You’re using your ChatGPT plan'); } },
+    { id: 'oauth-your-ai', caption: 'Native ChatGPT account and plan usage (fixture)', state: CHATGPT_READY, appState: ONBOARDED, run: async d => { await d.load('provider'); await d.waitText('Using ChatGPT plan');
+      if (await d.evalJs(`document.querySelector('#page').textContent.includes('Daily spend')`)) throw new Error('Subscription view shows API spending'); } },
+    { id: 'oauth-your-ai-narrow', caption: 'ChatGPT account at minimum window size', size: [760, 540], state: CHATGPT_READY, appState: ONBOARDED, run: async d => { await d.load('provider'); await d.waitText('Using ChatGPT plan'); } },
+    { id: 'oauth-signed-out', caption: 'ChatGPT session signed out, with reconnect action', state: { ...CHATGPT_READY, chatgpt: { ...CHATGPT_READY.chatgpt, connected: false } }, appState: ONBOARDED, run: async d => { await d.load('provider'); await d.waitSel('[data-fk="chatgpt-reconnect"]'); } },
+    { id: 'oauth-usage-limit', caption: 'Plan usage limit: paused, with Manage usage and explicit Resume', state: { ...CHATGPT_READY, paused: true, lastError: { kind: 'rate_limited', code: 'subscription_sharing_usage_limit_exceeded', at: 1 } }, appState: ONBOARDED, run: async d => { await d.load('home'); await d.waitText('ChatGPT usage limit reached.'); } },
+    { id: 'setup-s2-chatgpt-details', caption: 'ChatGPT plan details', state: {}, run: async d => { await pick(d, 'openai'); await details(d); } },
     { id: 'setup-s2-grok-details', caption: 'Step 2, Grok’s sheet: its note on refused requests', state: {}, run: async d => { await pick(d, 'xai'); await details(d); } },
     { id: 'setup-s2-gemini-details', caption: 'Step 2, Gemini’s sheet: billing and the 18+ note', state: {}, run: async d => { await pick(d, 'google'); await details(d); } },
     { id: 'setup-s2-other', caption: 'Step 2 with Other picked: Price varies, Set up Other', state: {}, run: d => pick(d, 'custom') },

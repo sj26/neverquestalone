@@ -128,9 +128,10 @@ test('refused: file: everywhere, every other scheme, host, port and look-alike, 
   assert.equal(checkShellRequest('devtools://devtools/x', { allowDevtools: true }).allow, true, 'devtools only when asked (unpackaged runs)');
 });
 
-test('no sign-in page opens anywhere (the OpenRouter sign-in is gone: OpenRouter connects through Other with a key), and a page never opens a window of its own', () => {
+test('sign-in opens in the system browser, never in a renderer window', () => {
   const main = code(fs.readFileSync(path.join(APP, 'main.mjs'), 'utf8'));
-  assert.doesNotMatch(main, /openSignInUrl|signInUrlOk|openExternal: /);
+  assert.doesNotMatch(main, /openSignInUrl|signInUrlOk/);
+  assert.match(main, /openExternal: openLinkUrl/);
   assert.doesNotMatch(main, /loadURL\([^)]*openrouter/i);
   assert.match(main, /setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/, 'a page can never open a window of its own');
 });
